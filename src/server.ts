@@ -1,7 +1,4 @@
 import { exports } from "cloudflare:workers";
-import { createWorker } from "@cloudflare/worker-bundler";
-import { handleGitHubImport } from "./github";
-
 export { DynamicWorkerTail, LogSession } from "./logging";
 
 type LoaderExports = {
@@ -17,6 +14,11 @@ type LoaderExports = {
 
 const runtimeExports = exports as LoaderExports;
 
+const PYTHON_WORKER_TEMPLATE = `from workers import Response, WorkerEntrypoint
+class Default(WorkerEntrypoint):
+    async def fetch(self, request):
+`;
+
 interface BundleInfo {
   mainModule: string;
   modules: string[];
@@ -28,42 +30,10 @@ interface WorkerState {
   buildTime: number;
 }
 
-interface RunRequestBody {
-  files: Record<string, string>;
-  version: number;
-  pathname?: string;
-  options?: {
-    bundle?: boolean;
-    minify?: boolean;
-  };
+interface RunPythonRequestBody {
+  code: string;
 }
 
-async function createWorkerId(
-  files: Record<string, string>,
-  options?: RunRequestBody["options"]
-): Promise<string> {
-  const sortedFiles = Object.keys(files)
-    .sort()
-    .map((path) => [path, files[path]]);
-
-  const payload = JSON.stringify({
-    files: sortedFiles,
-    bundle: options?.bundle ?? true,
-    minify: options?.minify ?? false
-  });
-
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(payload)
-  );
-  const hash = Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0")
-  )
-    .join("")
-    .slice(0, 16);
-
-  return `dynamic-workers-playground-worker-${hash}`;
-}
 
 async function executeWorker(
   worker: WorkerStub,
@@ -154,34 +124,38 @@ function buildErrorResponse(error: unknown): Response {
   );
 }
 
-function normalizeFiles(files: Record<string, string>): Record<string, string> {
-  const normalized = Object.fromEntries(
-    Object.entries(files)
-      .map(([path, contents]) => [path.trim(), contents])
-      .filter(([path]) => path.length > 0)
+
+function stripCommonIndent(code: string): string {
+  const lines = code.split("\n");
+  const nonEmpty = lines.filter((line) => line.trim().length > 0);
+  if (nonEmpty.length === 0) return "";
+  const minIndent = Math.min(
+    ...nonEmpty.map((line) => line.match(/^(\s*)/)?.[1].length ?? 0)
   );
+  return lines
+    .map((line) => (line.trim().length === 0 ? "" : line.slice(minIndent)))
+    .join("\n");
+}
 
-  if (!normalized["package.json"]) {
-    const entryPoint =
-      normalized["src/index.ts"] || normalized["src/index.js"]
-        ? Object.keys(normalized).find(
-            (file) => file === "src/index.ts" || file === "src/index.js"
-          )
-        : Object.keys(normalized).find(
-            (file) => file.endsWith(".ts") || file.endsWith(".js")
-          );
+function indentCode(code: string, spaces: number): string {
+  const indent = " ".repeat(spaces);
+  return code
+    .split("\n")
+    .map((line) => (line.trim().length === 0 ? "" : indent + line))
+    .join("\n");
+}
 
-    normalized["package.json"] = JSON.stringify(
-      {
-        name: "dynamic-workers-playground-worker",
-        main: entryPoint ?? "src/index.ts"
-      },
-      null,
-      2
-    );
+function normalizeCode(code: string): string {
+  const trimmed = code.trim();
+  if (!trimmed) {
+    throw new Error("Python code is required");
   }
-
-  return normalized;
+  // Já é um worker completo — não reempacota
+  if (trimmed.includes("WorkerEntrypoint") || trimmed.includes("class Default")) {
+    return trimmed;
+  }
+  const body = indentCode(stripCommonIndent(trimmed), 8);
+  return `${PYTHON_WORKER_TEMPLATE}${body}\n`;
 }
 
 export default {
@@ -192,24 +166,18 @@ export default {
   ): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname === "/api/github" && request.method === "POST") {
-      return handleGitHubImport(request);
-    }
-
-    if (url.pathname === "/api/run" && request.method === "POST") {
+    if (url.pathname === "/api/run_python" && request.method === "POST") {
       try {
-        const { files, pathname, options } =
-          (await request.json()) as RunRequestBody;
 
-        if (!files || Object.keys(files).length === 0) {
-          return Response.json(
-            { error: "At least one source file is required." },
-            { status: 400 }
-          );
-        }
+        const authHeader = request.headers.get("Authorization");
+        if (!authHeader || authHeader !== `Bearer ${env.API_KEY}`) return new Response(`Bearer ${env.API_KEY}`, { status: 401 });
 
-        const normalizedFiles = normalizeFiles(files);
-        const workerId = await createWorkerId(normalizedFiles, options);
+
+        const { code } = (await request.json()) as RunPythonRequestBody;
+
+        const workerCode = normalizeCode(code);
+
+
         const state: WorkerState = {
           bundleInfo: null,
           buildTime: 0
@@ -218,83 +186,13 @@ export default {
           .exports;
 
         const worker = env.LOADER.load({
-  compatibilityDate: "2026-06-25",
-  compatibilityFlags: ["python_workers"],
-  mainModule: "worker.py",
-  modules: {
-    "worker.py": `
-from workers import Response, WorkerEntrypoint
-
-class Default(WorkerEntrypoint):
-    async def fetch(self, request):
-        return Response("Hello from Python!")
-    `,
-  },
-});
-
-        return executeWorker(worker, state, workerId, pathname ?? "/");
-      } catch (error) {
-        return buildErrorResponse(error);
-      }
-    }
-
-    if (url.pathname === "/api/run_python" && request.method === "POST") {
-      try {
-        const { files, pathname, options } =
-          (await request.json()) as RunRequestBody;
-
-        if (!files || Object.keys(files).length === 0) {
-          return Response.json(
-            { error: "At least one source file is required" },
-            { status: 400 }
-          );
-        }
-
-        const normalizedFiles = normalizeFiles(files);
-        const workerId = await createWorkerId(normalizedFiles, options);
-        const state: WorkerState = {
-          bundleInfo: null,
-          buildTime: 0
-        };
-        const contextExports = (ctx as unknown as { exports: LoaderExports })
-          .exports;
-
-        const worker = env.LOADER.get(workerId, async () => {
-          const buildStart = Date.now();
-          const { mainModule, modules, wranglerConfig, warnings } =
-            await createWorker({
-              files: normalizedFiles,
-              bundle: options?.bundle ?? true,
-              minify: options?.minify ?? false
-            });
-
-          state.buildTime = Date.now() - buildStart;
-          state.bundleInfo = {
-            mainModule,
-            modules: Object.keys(modules),
-            warnings: warnings ?? []
-          };
-
-          return {
-            mainModule,
-            modules: modules as Record<string, string>,
-            compatibilityDate: "2026-06-25",
-            compatibilityFlags: ["python_workers"],
-            env: {
-              API_KEY: "sk-example-key-12345",
-              DEBUG: "true",
-              WORKER_ID: workerId
-            },
-            globalOutbound: null,
-            tails: [
-              contextExports.DynamicWorkerTail({
-                props: { workerId }
-              })
-            ]
-          };
+          compatibilityDate: "2026-06-25",
+          compatibilityFlags: ["python_workers"],
+          mainModule: "worker.py",
+          modules: { "worker.py": workerCode }
         });
 
-        return executeWorker(worker, state, workerId, pathname ?? "/");
+        return executeWorker(worker, state, "hello-v1", "/");
       } catch (error) {
         return buildErrorResponse(error);
       }
