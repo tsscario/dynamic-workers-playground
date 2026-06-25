@@ -170,7 +170,7 @@ export default {
       try {
 
         const authHeader = request.headers.get("Authorization");
-        if (!authHeader || authHeader !== `Bearer ${env.API_KEY}`) return new Response(`Unauthorized`, { status: 401 });
+        if (!authHeader || authHeader !== `Bearer ${env.API_KEY}`) return new Response(`Unauthorized.`, { status: 401 });
 
 
         const { code } = (await request.json()) as RunPythonRequestBody;
