@@ -266,7 +266,7 @@ export default {
 
         if (!files || Object.keys(files).length === 0) {
           return Response.json(
-            { error: "At least one source file is required." },
+            { error: "At least one source file is required" },
             { status: 400 }
           );
         }
