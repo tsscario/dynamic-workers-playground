@@ -217,41 +217,20 @@ export default {
         const contextExports = (ctx as unknown as { exports: LoaderExports })
           .exports;
 
-        const worker = env.LOADER.get(workerId, async () => {
-          const buildStart = Date.now();
-          const { mainModule, modules, wranglerConfig, warnings } =
-            await createWorker({
-              files: normalizedFiles,
-              bundle: options?.bundle ?? true,
-              minify: options?.minify ?? false
-            });
+        const worker = env.LOADER.load({
+  compatibilityDate: "2026-06-25",
+  compatibilityFlags: ["python_workers"],
+  mainModule: "worker.py",
+  modules: {
+    "worker.py": `
+from workers import Response, WorkerEntrypoint
 
-          state.buildTime = Date.now() - buildStart;
-          state.bundleInfo = {
-            mainModule,
-            modules: Object.keys(modules),
-            warnings: warnings ?? []
-          };
-
-          return {
-            mainModule,
-            modules: modules as Record<string, string>,
-            compatibilityDate:
-              wranglerConfig?.compatibilityDate ?? "2026-01-01",
-            compatibilityFlags: wranglerConfig?.compatibilityFlags ?? [],
-            env: {
-              API_KEY: "sk-example-key-12345",
-              DEBUG: "true",
-              WORKER_ID: workerId
-            },
-            globalOutbound: null,
-            tails: [
-              contextExports.DynamicWorkerTail({
-                props: { workerId }
-              })
-            ]
-          };
-        });
+class Default(WorkerEntrypoint):
+    async def fetch(self, request):
+        return Response("Hello from Python!")
+    `,
+  },
+});
 
         return executeWorker(worker, state, workerId, pathname ?? "/");
       } catch (error) {
@@ -299,9 +278,8 @@ export default {
           return {
             mainModule,
             modules: modules as Record<string, string>,
-            compatibilityDate:
-              wranglerConfig?.compatibilityDate ?? "2026-01-01",
-            compatibilityFlags: wranglerConfig?.compatibilityFlags ?? [],
+            compatibilityDate: "2026-06-25",
+            compatibilityFlags: ["python_workers"],
             env: {
               API_KEY: "sk-example-key-12345",
               DEBUG: "true",
