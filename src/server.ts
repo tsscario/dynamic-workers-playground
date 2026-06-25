@@ -259,6 +259,69 @@ export default {
       }
     }
 
+    if (url.pathname === "/api/run_python" && request.method === "POST") {
+      try {
+        const { files, pathname, options } =
+          (await request.json()) as RunRequestBody;
+
+        if (!files || Object.keys(files).length === 0) {
+          return Response.json(
+            { error: "At least one source file is required." },
+            { status: 400 }
+          );
+        }
+
+        const normalizedFiles = normalizeFiles(files);
+        const workerId = await createWorkerId(normalizedFiles, options);
+        const state: WorkerState = {
+          bundleInfo: null,
+          buildTime: 0
+        };
+        const contextExports = (ctx as unknown as { exports: LoaderExports })
+          .exports;
+
+        const worker = env.LOADER.get(workerId, async () => {
+          const buildStart = Date.now();
+          const { mainModule, modules, wranglerConfig, warnings } =
+            await createWorker({
+              files: normalizedFiles,
+              bundle: options?.bundle ?? true,
+              minify: options?.minify ?? false
+            });
+
+          state.buildTime = Date.now() - buildStart;
+          state.bundleInfo = {
+            mainModule,
+            modules: Object.keys(modules),
+            warnings: warnings ?? []
+          };
+
+          return {
+            mainModule,
+            modules: modules as Record<string, string>,
+            compatibilityDate:
+              wranglerConfig?.compatibilityDate ?? "2026-01-01",
+            compatibilityFlags: wranglerConfig?.compatibilityFlags ?? [],
+            env: {
+              API_KEY: "sk-example-key-12345",
+              DEBUG: "true",
+              WORKER_ID: workerId
+            },
+            globalOutbound: null,
+            tails: [
+              contextExports.DynamicWorkerTail({
+                props: { workerId }
+              })
+            ]
+          };
+        });
+
+        return executeWorker(worker, state, workerId, pathname ?? "/");
+      } catch (error) {
+        return buildErrorResponse(error);
+      }
+    }
+
     return new Response("Not found", { status: 404 });
   }
 } satisfies ExportedHandler<Env>;
