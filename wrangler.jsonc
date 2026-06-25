@@ -4,10 +4,6 @@
   "main": "src/server.ts",
   "compatibility_date": "2026-06-11",
   "compatibility_flags": ["nodejs_compat"],
-  "assets": {
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
-  },
   "worker_loaders": [{ "binding": "LOADER" }],
   "durable_objects": {
     "bindings": [{ "name": "LogSession", "class_name": "LogSession" }]
