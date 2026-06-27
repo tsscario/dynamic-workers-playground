@@ -1,4 +1,4 @@
-# Dynamic Workers Playground
+# Python processor
 
 Write, bundle, and run Cloudflare Worker code at runtime using [`@cloudflare/worker-bundler`](https://www.npmjs.com/package/@cloudflare/worker-bundler) and [Dynamic Worker Loaders](https://developers.cloudflare.com/workers/runtime-apis/bindings/worker-loader/).
 
@@ -13,41 +13,71 @@ npm start     # from this directory
 
 ## What it demonstrates
 
-**Server-side**
-
-- Runtime bundling with `@cloudflare/worker-bundler` — resolves npm deps and bundles source files inside a Worker
+- Python runtime bundling with `@cloudflare/worker-bundler` — run python code inside a Worker
 - Dynamic execution via a `worker_loaders` binding, with automatic caching when source hasn't changed
 - Log capture pipeline — a Tail Worker (`DynamicWorkerTail`) forwards `console.*` output from dynamically loaded workers to a Durable Object (`LogSession`), streamed back to the caller in real time
 - Execution timing — granular build/load/run breakdown with cold vs. warm start detection
 
-**Client-side**
-
-- Tabbed file editor with Tab-key indentation support
-- Load built-in example workers or import any public GitHub repo
-- Bundle/minify toggles passed through to `worker-bundler`
-- Real-time output: response body, console logs, timing, and bundle info
-
 ## How it works
 
-When you click **Run Worker**, the host Worker receives your source files and calls `createWorker()` from `@cloudflare/worker-bundler` to bundle them at runtime:
+When you call the endpoint `api/run_python`, the host Worker receives your code and calls `createWorker()` from `@cloudflare/worker-bundler` to bundle them at runtime.
 
-```ts
-const { mainModule, modules, wranglerConfig, warnings } = await createWorker({
-  files: normalizedFiles,
-  bundle: options?.bundle ?? true,
-  minify: options?.minify ?? false
-});
+## API
 
-const worker = env.LOADER.get(workerId, async () => ({
-  mainModule,
-  modules,
-  tails: [contextExports.DynamicWorkerTail({ props: { workerId } })]
-}));
+### 🚀 Python runtime (POST /api/run_python)
 
-const response = await worker.getEntrypoint().fetch(request);
+Run python code inside dynamic worker
+
+
+### 🔐 Autenticação
+
+Tipo: Bearer Token (JWT)
+
+### 📥 Parâmetros da Requisição
+
+**Headers**
+
+| Chave  | Tipo | Obrigatório  | Descrição  |
+|---|---|---|---|
+| Content-Type | string | Sim | application/json |
+| Authorization | string | Sim | Bearer <seu_token> |
+
+
+**Body**
+
+| Chave  | Tipo | Obrigatório  | Descrição  |
+|---|---|---|---|
+| code | string | Sim | Código python |
+
+### 📤 Respostas
+
+**Sucesso `200 OK`**
+
+```json
+{
+    "bundleInfo": {
+        "mainModule": "(cached)",
+        "modules": [],
+        "warnings": []
+    },
+    "response": {
+        "status": 200,
+        "headers": {
+            "content-type": "text/plain;charset=UTF-8"
+        },
+        "body": "result"
+    },
+    "workerError": null,
+    "logs": [],
+    "timing": {
+        "buildTime": 0,
+        "loadTime": 1892,
+        "runTime": 0,
+        "totalTime": 1892
+    }
+}
 ```
 
-Console logs from the dynamic worker are captured by `DynamicWorkerTail` (a Tail Worker) and routed through a `LogSession` Durable Object back to the HTTP response.
 
 ## Learn more
 
